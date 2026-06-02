@@ -35,12 +35,11 @@ def fetch_data(map_key):
     print(response.status_code)
     print()
     print(response.text[:200]) 
-    
+    print()
     fires_df = pd.read_csv(url_api)
-
+    print()
     print(fires_df.info())
     print()
-    print(fires_df.head())
     
     fires_gdf = gpd.GeoDataFrame(
         fires_df,
@@ -56,10 +55,10 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
     Filtering global fire detection to Madagascar and add derived variables:
     
     Perfom spatial join to keep only fires within Madagascar (polygon) and
-    calculate 3 "new" columns:
+    add:
     temp_diff: brightness temperature difference (bright_ti4 - bright_ti5)
     datetime: combined acq_time and acq_date as datetime object
-    ecoregion/biome: island divided into ecoregions/biomes 
+    ecoregion & biome: island divided into ecoregions
 
     Parameters
     ----------
@@ -78,14 +77,15 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
     -------
     gpd.GeoDataFrame
         cleaned and adjusted for Madagascar
-        containing columns: latitude, longitude,temp_diff,
-        bright_ti4,bright_ti5, frp, daynight, datetime, ecoregion,
-        biome,geometry
+        containing columns: latitude, longitude, temp_diff,
+        bright_ti4, bright_ti5, frp, daynight, datetime, ecoregion,
+        biome, geometry
     """
     
     ## Spatial Join
     fires= gpd.sjoin(
         fires_gdf,
+        #use geometry and name as join
         madagascar[['geometry', 'NAME']],
         #only matching points are kept that are in madagascar polygon
         how='inner', 
@@ -94,13 +94,13 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
 
     ## Clean Data
     print()
-    print(fires.isnull().sum())
+    print(f"Missing values per column: \n{fires.isnull().sum()}")
     
     fires = fires.dropna()
     
     ## Derived Variables
     
-    # ΔT = Ti4 - Ti 5
+    # ΔT = ti4 - ti5
     # Ti4 = fire brightness temperature (flame) , Ti5 = background land surface temperature
     # ΔT = temp_diff = how much hotter the fire is compared to its sorroundings (K)
     fires['temp_diff'] = fires['bright_ti4']- fires['bright_ti5']
@@ -113,9 +113,6 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
     fires['acq_time'].str[:2] + ':' + # first 2 spaces : hours
     fires['acq_time'].str[2:], # last 2 minutes
     format='%Y-%m-%d %H:%M')
-
-    # data Ecoregion
-    ecoregions.head(7)
     
     # Ecoregion subdivision
     fires = gpd.sjoin(
@@ -124,7 +121,7 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
         ecoregions[['geometry', 'ECO_NAME', 'BIOME_NAME']].reset_index(drop=True),
         how='left', 
         predicate='within'
-        #drop the "new" one leftover
+        #drop the "new" index_right
     ).drop(columns =['index_right'], errors=['ignore'])
         
     fires = fires.rename(columns={'ECO_NAME': 'ecoregion', 'BIOME_NAME': 'biome'})
@@ -135,14 +132,15 @@ def prepare_fires(fires_gdf, madagascar, ecoregions):
         'latitude', 'longitude',
         'temp_diff', 'bright_ti4', 'bright_ti5',
         'frp', 'daynight', 'datetime', 'ecoregion', 'biome','geometry']]
-    
-    print(f"Fires within Madagascar: {len(fires)} detections.\n")
+
+    print()
+    print(f"Fires within Madagascar: {len(fires)} detections\n")
     return fires
 
     
 def region_analysis(fires_madagascar):
     """
-    Computes relationship and regional inensity.
+    Computes relationship and regional intensity.
     
     Calculate the correlation between FRP and temp_diff to asses 
     if both intensity meauseres agree. 
@@ -152,7 +150,7 @@ def region_analysis(fires_madagascar):
     ---------
     fires_madagascar: gpd.GeoDataFrame
         cleaned data from prepare_fires:
-        contains 'frp', 'temp_diff', 'ecregion'
+        contains 'frp', 'temp_diff', 'ecoregion'
 
     Returns
     -------
@@ -169,7 +167,7 @@ def region_analysis(fires_madagascar):
     # mean frp: typical (avg.) total fire energy per region 
     # mean temp_diff: typical (avg.) fire intensity above landsurface temperature around the fire
     # = avg. of how much hotter burns fire than the sorrounding land surface temp. per region
-    # direct comparison between North and South
+    # direct comparison between the ecoregions
     region_stats = fires_madagascar.groupby('ecoregion')[['frp', 'temp_diff']].mean()
     print(region_stats)
     
@@ -210,7 +208,7 @@ def region_analysis(fires_madagascar):
         edgecolor = 'black')
     axes[0].set_title('Avg FRP by ecoregion')
     axes[0].set_ylabel('')
-    axes[0].set_xlabel('mean FRP')
+    axes[0].set_xlabel('mean FRP MW')
     
     region_stats['temp_diff'].plot(
         #horizontal bar charts
@@ -240,10 +238,11 @@ def build_map(fires_madagascar, madagascar, ecoregions):
     Size represents frp using min-max normalization (large circle = higher frp)
     Color shows temp_diff using sequential colormap (lightyellow = low diff.,
     dark red = high diff.)
-    Sorted fires to get small circles on top of larger ones.
-    -layer 3 Heatmap: Fire density surface weighted by FRP
-    shows where the intense fire activity is concentrated.
+    Sorted fires to get small circles on top of larger ones
     -layer 2 MarkerClusters: overview of fire locations
+    -layer 3 Heatmap: Fire density surface weighted by FRP
+    shows where the intense fire activity is concentrated
+    
 
     To get map center:
     Computes Madagascar polygon centroid, first reprojected to EPSG:32738 (calculation with
@@ -353,7 +352,7 @@ def build_map(fires_madagascar, madagascar, ecoregions):
         colors = ['LightYellow', 'DarkOrange', 'FireBrick'],
         vmin = fires_madagascar['temp_diff'].quantile(0.05),
         vmax = fires_madagascar['temp_diff'].quantile(0.95),
-        caption =  'ΔT = Ti4-Ti5 (K)'
+        caption =  'ΔT = ti4-ti5 (K)'
     ).add_to(m)
 
     ##FRP scaling for circle radius
@@ -444,7 +443,6 @@ def build_map(fires_madagascar, madagascar, ecoregions):
     # for user to switch layers on/off: add of toggle panel
     # panel opens by default so user can see right away the options (coll.=False)
     folium.LayerControl(collapsed=False).add_to(m)
-
 
     return m
     
